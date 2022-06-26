@@ -1,5 +1,6 @@
 import multiprocessing as mp
 from collections import OrderedDict
+from re import L
 from typing import Any, Callable, List, Optional, Sequence, Tuple, Type, Union
 
 import gym
@@ -29,7 +30,7 @@ def _worker(
                 observation, reward, done, info = env.step(data)
                 if done:
                     # save final observation where user can get it, then reset
-                    info["terminal_observation"] = observation
+                    # info["terminal_observation"] = observation
                     observation = env.reset()
                 remote.send((observation, reward, done, info))
             elif cmd == "seed":
@@ -109,22 +110,46 @@ class SubprocVecEnv(VecEnv):
 
         self.remotes[0].send(("get_spaces", None))
         observation_space, action_space = self.remotes[0].recv()
-        VecEnv.__init__(self, len(env_fns), observation_space, action_space)
+        self.num_agents = len(observation_space)
+        VecEnv.__init__(self, len(env_fns)*self.num_agents, observation_space[0], action_space[0])
 
     def step_async(self, actions: np.ndarray) -> None:
-        for remote, action in zip(self.remotes, actions):
-            remote.send(("step", action))
+        # for remote, action in zip(self.remotes, actions):
+            
+        #     remote.send(("step", action))
+        wrapped_actions = []
+        for i in range(0,len(actions)//self.num_agents):
+            action = []
+            for a in range(self.num_agents):
+                action.append(actions[i*self.num_agents+a])
+            wrapped_actions.append(action)
+        for remote, action in zip(self.remotes, wrapped_actions):
+            remote.send(("step", tuple(action)))
         self.waiting = True
 
     def step_wait(self) -> VecEnvStepReturn:
         results = [remote.recv() for remote in self.remotes]
         self.waiting = False
         obs, rews, dones, infos = zip(*results)
-        return _flatten_obs(obs, self.observation_space), np.stack(rews), np.stack(dones), infos
+        processed_obs = []
+        for o in obs:
+            for oo in o:
+                processed_obs.append(oo)
+        processed_rew = []
+        for r in rews:
+            for rr in r:
+                processed_rew.append(rr)
+        processed_dones = []
+        for d in dones:
+            for a in range(self.num_agents):
+                processed_dones.append(d)
+        processed_infos = []
+        for info in infos:
+            for i in info:
+                processed_infos.append(i)
+        return _flatten_obs(processed_obs, self.observation_space), np.stack(processed_rew), np.stack(processed_dones), processed_infos
 
     def seed(self, seed: Optional[int] = None) -> List[Union[None, int]]:
-        if seed is None:
-            seed = np.random.randint(0, 2**32 - 1)
         for idx, remote in enumerate(self.remotes):
             remote.send(("seed", seed + idx))
         return [remote.recv() for remote in self.remotes]
@@ -133,7 +158,11 @@ class SubprocVecEnv(VecEnv):
         for remote in self.remotes:
             remote.send(("reset", None))
         obs = [remote.recv() for remote in self.remotes]
-        return _flatten_obs(obs, self.observation_space)
+        processed_obs = []
+        for o in obs:
+            for oo in o:
+                processed_obs.append(oo)
+        return _flatten_obs(processed_obs, self.observation_space)
 
     def close(self) -> None:
         if self.closed:
@@ -217,6 +246,6 @@ def _flatten_obs(obs: Union[List[VecEnvObs], Tuple[VecEnvObs]], space: gym.space
     elif isinstance(space, gym.spaces.Tuple):
         assert isinstance(obs[0], tuple), "non-tuple observation for environment with Tuple observation space"
         obs_len = len(space.spaces)
-        return tuple(np.stack([o[i] for o in obs]) for i in range(obs_len))
+        return tuple((np.stack([o[i] for o in obs]) for i in range(obs_len)))
     else:
         return np.stack(obs)
