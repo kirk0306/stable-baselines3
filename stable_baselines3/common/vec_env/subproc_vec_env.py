@@ -28,9 +28,11 @@ def _worker(
             cmd, data = remote.recv()
             if cmd == "step":
                 observation, reward, done, info = env.step(data)
-                if done:
+                if all(done):
                     # save final observation where user can get it, then reset
-                    # info["terminal_observation"] = observation
+                    # info["terminal_observation"] = observation\
+                    for i, o in zip(info, observation):
+                        i['terminal_observation'] = o
                     observation = env.reset()
                 remote.send((observation, reward, done, info))
             elif cmd == "seed":
@@ -89,7 +91,7 @@ class SubprocVecEnv(VecEnv):
         self.waiting = False
         self.closed = False
         n_envs = len(env_fns)
-
+        print('init subproc')
         if start_method is None:
             # Fork is not a thread safe method (see issue #217)
             # but is more user friendly (does not require to wrap the code in
@@ -141,8 +143,8 @@ class SubprocVecEnv(VecEnv):
                 processed_rew.append(rr)
         processed_dones = []
         for d in dones:
-            for a in range(self.num_agents):
-                processed_dones.append(d)
+            for dd in d:
+                processed_dones.append(dd)
         processed_infos = []
         for info in infos:
             for i in info:
